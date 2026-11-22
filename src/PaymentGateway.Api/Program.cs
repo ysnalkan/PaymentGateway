@@ -1,4 +1,21 @@
-using PaymentGateway.Api.Services;
+using OpenTelemetry.Logs;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using FluentValidation;
+
+using PaymentGateway.Api.Exceptions;
+using PaymentGateway.Api.Handlers;
+using PaymentGateway.Api.Metrics;
+using PaymentGateway.Api.Middleware;
+using PaymentGateway.Api.Models.Requests;
+using PaymentGateway.Api.Validators;
+using PaymentGateway.Domain.Extensions;
+using PaymentGateway.Domain.Interfaces;
+using PaymentGateway.Infrastructure.Extensions;
+
+
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -9,9 +26,104 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddSingleton<PaymentsRepository>();
+builder.Services.AddScoped< IValidator<PostPaymentRequest>, PostPaymentRequestValidator>();
+builder.Services.AddSingleton<IPaymentMetrics, PaymentMetrics>();
+
+builder.Services.AddDomainServices();
+builder.Services.AddRepositoryServices(builder.Configuration);
+
+builder.Logging.AddJsonConsole(options =>
+{
+    options.IncludeScopes = true;
+    options.UseUtcTimestamp = true;
+    options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+});
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails(options =>
+{
+    options.CustomizeProblemDetails = context =>
+    {
+        context.ProblemDetails.Extensions.Remove("traceId");
+        context.ProblemDetails.Extensions["correlationId"] = context.HttpContext.TraceIdentifier;
+    };
+});
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddTransient<CorrelationIdHandler>();
+builder.Services.AddHttpClient("simulator").AddHttpMessageHandler<CorrelationIdHandler>();
+
+
+//Logging
+builder.Logging.AddOpenTelemetry(options =>
+{
+    options.IncludeFormattedMessage = true;
+    options.IncludeScopes = true;
+    options.ParseStateValues = true;
+
+    options.AddOtlpExporter();
+});
+
+
+builder.Services.AddOpenTelemetry()
+
+    // Service identification
+    .ConfigureResource(resource =>
+        resource.AddService(
+            serviceName: "PaymentGateway.Api",
+            serviceVersion: "1.0.0"))
+
+    // Distributed tracing
+    .WithTracing(tracing =>
+    {
+        tracing
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddOtlpExporter();
+    })
+
+// Metrics
+.WithMetrics(metrics =>
+{
+    metrics
+        .AddAspNetCoreInstrumentation()
+        .AddHttpClientInstrumentation()
+        .AddRuntimeInstrumentation()
+        .AddMeter("PaymentGateway.Api")
+        .AddOtlpExporter();
+});
+
 
 var app = builder.Build();
+
+app.Logger.LogInformation(
+    "Payment Gateway started. OpenTelemetry logging test.");
+
+app.Use(async (context, next) =>
+{
+    var correlationId = Guid.NewGuid().ToString("N");
+
+    context.TraceIdentifier = correlationId;
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Correlation-ID"] = correlationId;
+        return Task.CompletedTask;
+    });
+
+    using var scope = app.Logger.BeginScope(
+        new Dictionary<string, object?>
+        {
+            ["CorrelationId"] = correlationId,
+            ["ClientIp"] = context.Connection.RemoteIpAddress?.ToString()
+        });
+
+    await next(context);
+});
+
+// Error metrics middleware
+app.UseMiddleware<ErrorMetricsMiddleware>();
+
+app.UseExceptionHandler();
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -27,3 +139,5 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+public partial class Program { }

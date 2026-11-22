@@ -1,61 +1,82 @@
-﻿using System.Net;
+﻿
+using System.Net;
 using System.Net.Http.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
-
-using PaymentGateway.Api.Controllers;
 using PaymentGateway.Api.Models.Responses;
-using PaymentGateway.Api.Services;
+using PaymentGateway.Api.Tests.Infrastructure;
+using PaymentGateway.Domain.Enums;
+using PaymentGateway.Domain.Interfaces;
+using PaymentGateway.Domain.Models;
+using FluentAssertions;
 
 namespace PaymentGateway.Api.Tests;
 
-public class PaymentsControllerTests
+public class PaymentsControllerTests : IAsyncDisposable
 {
-    private readonly Random _random = new();
-    
-    [Fact]
-    public async Task RetrievesAPaymentSuccessfully()
+    private readonly PaymentGatewayApplicationFactory _factory;
+    private readonly HttpClient _client;
+    private readonly IPaymentRepository _repository;
+
+    public PaymentsControllerTests()
     {
-        // Arrange
-        var payment = new PostPaymentResponse
-        {
-            Id = Guid.NewGuid(),
-            ExpiryYear = _random.Next(2023, 2030),
-            ExpiryMonth = _random.Next(1, 12),
-            Amount = _random.Next(1, 10000),
-            CardNumberLastFour = _random.Next(1111, 9999),
-            Currency = "GBP"
-        };
+        _factory = new PaymentGatewayApplicationFactory();
+        _client = _factory.CreateGatewayClient();
 
-        var paymentsRepository = new PaymentsRepository();
-        paymentsRepository.Add(payment);
-
-        var webApplicationFactory = new WebApplicationFactory<PaymentsController>();
-        var client = webApplicationFactory.WithWebHostBuilder(builder =>
-            builder.ConfigureServices(services => ((ServiceCollection)services)
-                .AddSingleton(paymentsRepository)))
-            .CreateClient();
-
-        // Act
-        var response = await client.GetAsync($"/api/Payments/{payment.Id}");
-        var paymentResponse = await response.Content.ReadFromJsonAsync<PostPaymentResponse>();
-        
-        // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.NotNull(paymentResponse);
+        _repository = _factory.Services
+            .GetRequiredService<IPaymentRepository>();
     }
 
     [Fact]
-    public async Task Returns404IfPaymentNotFound()
+    public async Task When_PaymentExists_Should_ReturnPayment()
     {
         // Arrange
-        var webApplicationFactory = new WebApplicationFactory<PaymentsController>();
-        var client = webApplicationFactory.CreateClient();
-        
+        var payment = new Payment
+        {
+            Id = Guid.NewGuid(),
+            Status = PaymentStatus.Authorized,
+            CardNumberLastFour = "0012",
+            ExpiryMonth = 12,
+            ExpiryYear = DateTime.UtcNow.Year + 1,
+            Amount = 1050,
+            Currency = "GBP"
+        };
+
+        _repository.Add(payment, CancellationToken.None);
+
         // Act
-        var response = await client.GetAsync($"/api/Payments/{Guid.NewGuid()}");
-        
+        using var response = await _client.GetAsync($"/api/payments/{payment.Id}");
+
         // Assert
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var retrieved = await response.Content.ReadFromJsonAsync<GetPaymentResponse>();
+        retrieved.Should().NotBeNull();
+
+        retrieved.Id.Should().Be(payment.Id);
+        retrieved.Status.Should().Be(payment.Status);
+        retrieved.CardNumberLastFour.Should().Be(payment.CardNumberLastFour);
+        retrieved.ExpiryMonth.Should().Be(payment.ExpiryMonth);
+        retrieved.ExpiryYear.Should().Be(payment.ExpiryYear);
+        retrieved.Amount.Should().Be(payment.Amount);
+        retrieved.Currency.Should().Be(payment.Currency);
+    }
+
+    [Fact]
+    public async Task When_PaymentDoesNotExist_Should_Return404()
+    {
+        // Arrange
+        var missingPaymentId = Guid.NewGuid();
+
+        // Act
+        using var response = await _client.GetAsync($"/api/payments/{missingPaymentId}");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _client.Dispose();
+        await _factory.DisposeAsync();
     }
 }

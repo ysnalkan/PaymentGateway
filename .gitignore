@@ -452,3 +452,16 @@ $RECYCLE.BIN/
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
+
+# Coverage report output directories
+[Cc]overage/
+[Cc]overage[Rr]eport/
+[Cc]overage-[Rr]eport/
+
+# Local environment overrides (keep example templates)
+.env
+.env.*
+!.env.example
+!.env.sample
+appsettings.Local.json
+appsettings.*.Local.json
