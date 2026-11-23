@@ -220,11 +220,12 @@ The API uses OpenTelemetry for centralized observability, with the .NET Aspire D
 
 ### Correlation ID
 
-The API generates a fresh correlation ID for every incoming request. It does not reuse an incoming correlation header.
+The API uses the OpenTelemetry `Activity.TraceId` as the correlation ID when an active Activity is available. If no Activity is available, it falls back to ASP.NET Core's `HttpContext.TraceIdentifier`.
 
 - The correlation ID is returned in the `X-Correlation-ID` response header.
-- It is included in the structured logging scope.
-- It is forwarded to the Bank Simulator using the same header.
+- It is included in the structured logging scope for consistent request tracking.
+- It is forwarded to the Bank Simulator using the same `X-Correlation-ID` header.
+- The same ID is included in Problem Details error responses, allowing clients to correlate errors with application logs and distributed traces.
 
 ### Logging
 
