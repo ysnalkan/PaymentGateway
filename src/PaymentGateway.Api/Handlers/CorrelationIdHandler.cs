@@ -1,10 +1,14 @@
+using System.Diagnostics;
+
 namespace PaymentGateway.Api.Handlers;
 
 public sealed class CorrelationIdHandler(IHttpContextAccessor contextAccessor) : DelegatingHandler
 {
     protected override Task<HttpResponseMessage> SendAsync( HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var correlationId = contextAccessor.HttpContext?.TraceIdentifier;
+
+        var correlationId =Activity.Current?.TraceId.ToString()
+                        ?? contextAccessor.HttpContext?.TraceIdentifier;
 
         if (!string.IsNullOrWhiteSpace(correlationId))
         {

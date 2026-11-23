@@ -1,10 +1,14 @@
+using System.Diagnostics;
+
+using FluentValidation;
+
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using FluentValidation;
 
 using PaymentGateway.Api.Exceptions;
+using PaymentGateway.Api.Extensions;
 using PaymentGateway.Api.Handlers;
 using PaymentGateway.Api.Metrics;
 using PaymentGateway.Api.Middleware;
@@ -13,7 +17,6 @@ using PaymentGateway.Api.Validators;
 using PaymentGateway.Domain.Extensions;
 using PaymentGateway.Domain.Interfaces;
 using PaymentGateway.Infrastructure.Extensions;
-
 
 
 
@@ -26,11 +29,9 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-builder.Services.AddScoped< IValidator<PostPaymentRequest>, PostPaymentRequestValidator>();
-builder.Services.AddSingleton<IPaymentMetrics, PaymentMetrics>();
-
+builder.Services.AddApiServices();
 builder.Services.AddDomainServices();
-builder.Services.AddRepositoryServices(builder.Configuration);
+builder.Services.AddInfrastructureServices(builder.Configuration);
 
 builder.Logging.AddJsonConsole(options =>
 {
@@ -45,7 +46,10 @@ builder.Services.AddProblemDetails(options =>
     options.CustomizeProblemDetails = context =>
     {
         context.ProblemDetails.Extensions.Remove("traceId");
-        context.ProblemDetails.Extensions["correlationId"] = context.HttpContext.TraceIdentifier;
+
+        context.ProblemDetails.Extensions["correlationId"] =
+            Activity.Current?.TraceId.ToString()
+            ?? context.HttpContext.TraceIdentifier;
     };
 });
 
@@ -99,26 +103,7 @@ var app = builder.Build();
 app.Logger.LogInformation(
     "Payment Gateway started. OpenTelemetry logging test.");
 
-app.Use(async (context, next) =>
-{
-    var correlationId = Guid.NewGuid().ToString("N");
-
-    context.TraceIdentifier = correlationId;
-    context.Response.OnStarting(() =>
-    {
-        context.Response.Headers["X-Correlation-ID"] = correlationId;
-        return Task.CompletedTask;
-    });
-
-    using var scope = app.Logger.BeginScope(
-        new Dictionary<string, object?>
-        {
-            ["CorrelationId"] = correlationId,
-            ["ClientIp"] = context.Connection.RemoteIpAddress?.ToString()
-        });
-
-    await next(context);
-});
+app.UseMiddleware<RequestLoggingMiddleware>();
 
 // Error metrics middleware
 app.UseMiddleware<ErrorMetricsMiddleware>();

@@ -65,11 +65,8 @@ public sealed class GlobalExceptionHandler(
 
         await Results.Problem(
             statusCode: status,
-            title: title,
-            extensions: new Dictionary<string, object?>
-            {
-                ["correlationId"] = context.TraceIdentifier
-            }).ExecuteAsync(context);
+            title: title)
+            .ExecuteAsync(context);
 
         return true;
     }
